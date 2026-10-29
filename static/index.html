@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prescription Safety Checker (test form)</title>
+<style>
+  body{font-family:system-ui,Arial,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:#1c2b2d;background:#f6f9f9}
+  h1{font-size:22px;margin:0 0 4px} .sub{color:#5b6b6e;font-size:14px;margin-bottom:16px}
+  fieldset{border:1px solid #cfdcdc;border-radius:10px;margin:0 0 14px;padding:12px 14px;background:#fff}
+  legend{font-weight:600;padding:0 6px}
+  label{display:block;font-size:13px;margin:8px 0 3px;color:#3d4f52}
+  input,select,textarea{width:100%;padding:8px;border:1px solid #b9c9c9;border-radius:6px;font-size:14px;box-sizing:border-box;font-family:inherit}
+  textarea{resize:vertical;min-height:64px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px} .chk{display:flex;gap:6px;align-items:center;margin-top:8px;font-size:13px}
+  .chk input{width:auto}
+  button{background:#00727a;color:#fff;border:0;border-radius:8px;padding:11px 18px;font-size:15px;cursor:pointer}
+  button:disabled{opacity:.6}
+  .card{border-radius:8px;padding:10px 12px;margin:8px 0;border-left:5px solid #7aa;background:#fff;font-size:14px}
+  .High{border-color:#d33;background:#fff1f1}.Moderate{border-color:#d9a400;background:#fffaea}.Low{border-color:#3a7bd5;background:#f0f6ff}
+  .box{background:#fff;border:1px solid #cfdcdc;border-radius:10px;padding:12px 14px;margin-top:14px}
+  .small{font-size:12px;color:#5b6b6e} pre{white-space:pre-wrap;font-family:inherit;margin:6px 0 0;line-height:1.5}
+  .err{color:#b00020;font-size:14px}
+</style></head><body>
+<h1>Prescription Safety Checker</h1>
+<div class="sub">Test form. Synthetic data only, no real patient details.</div>
+
+<fieldset><legend>Patient</legend>
+  <div class="row">
+    <div><label>Age (years)</label><input id="age" type="number" min="0" max="120"></div>
+    <div><label>Weight (kg)</label><input id="weight" type="number" min="1" max="300" step="0.1"></div>
+  </div>
+  <label>Conditions (comma separated, optional)</label><input id="conditions" placeholder="diabetes, hypertension">
+  <label>Allergies (comma separated, optional)</label><input id="allergies" placeholder="penicillin">
+  <div class="chk"><input type="checkbox" id="nkda"><label for="nkda" style="margin:0">Patient confirmed: no known drug allergies</label></div>
+  <label>Current medicines (comma separated, optional)</label><input id="current" placeholder="metformin">
+</fieldset>
+
+<fieldset><legend>New prescription</legend>
+  <label>Medicine name *</label><input id="name" placeholder="Paracetamol">
+  <div class="row">
+    <div><label>Strength</label><input id="strength" placeholder="500 mg"></div>
+    <div><label>Route</label><input id="route" placeholder="oral"></div>
+    <div><label>Frequency</label><input id="frequency" placeholder="twice daily / 1-0-1"></div>
+    <div><label>Duration</label><input id="duration" placeholder="3 days"></div>
+  </div>
+</fieldset>
+
+<fieldset><legend>Your question (optional)</legend>
+  <label>Anything you want to ask about this medicine?</label>
+  <textarea id="question" maxlength="300" placeholder="e.g. Kya main ye medicine le lu?"></textarea>
+</fieldset>
+
+<div class="row" style="align-items:end">
+  <div><label>Answer language</label>
+    <select id="lang"><option value="hi">Hinglish</option><option value="en">English</option></select></div>
+  <div><button id="go">Check prescription</button></div>
+</div>
+<div id="out"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const API = location.port === "8000" ? "" : "http://localhost:8000";
+const list = s => s.split(",").map(x => x.trim()).filter(Boolean);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+
+function buildPayload() {
+  const p = {patient_key: "WEB-DEMO"};
+  if ($("age").value) p.age = {value: parseInt($("age").value, 10), source: "user_entered"};
+  if ($("weight").value) p.weight_kg = {value: parseFloat($("weight").value), source: "user_entered"};
+  if ($("conditions").value.trim()) p.conditions = {value: list($("conditions").value).map(n => ({name: n})), source: "user_entered"};
+  if ($("allergies").value.trim()) p.allergies = {value: list($("allergies").value).map(s => ({substance: s})), source: "user_entered"};
+  else if ($("nkda").checked) p.allergies = {value: [], source: "user_entered"};   // sirf jab user ne confirm kiya
+  if ($("current").value.trim()) p.current_medicines = {value: list($("current").value).map(n => ({name: n})), source: "user_entered"};
+  const m = {name: $("name").value.trim(), source: "user_entered"};
+  for (const k of ["strength", "route", "frequency", "duration"]) if ($(k).value.trim()) m[k] = $(k).value.trim();
+  const body = {patient: p, new_prescription: [m], context: {jurisdiction: "IN", language: $("lang").value}};
+  if ($("question").value.trim()) body.user_question = $("question").value.trim();
+  return body;
+}
+
+$("go").onclick = async () => {
+  const out = $("out"); out.replaceChildren();
+  if (!$("name").value.trim()) { out.append(el("p", "err", "Medicine name is required.")); return; }
+  $("go").disabled = true; out.append(el("p", "small", "Checking..."));
+  try {
+    const r = await fetch(API + "/check-prescription", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(buildPayload())});
+    const txt = await r.text(); let d;
+    try { d = JSON.parse(txt); } catch (e) {
+      out.replaceChildren(el("p", "err", "Server se khali ya galat jawab aaya (HTTP " + r.status + "). Page ko http://localhost:8000/ se kholo."));
+      return;
+    }
+    out.replaceChildren();
+    if (!r.ok) { out.append(el("p", "err", "Error " + r.status + ": " + JSON.stringify(d.detail))); return; }
+
+    const ex = el("div", "box"); ex.append(el("b", "", "Answer"), el("pre", "", d.explanation));
+    ex.append(el("div", "small", d.disclaimer));
+    ex.append(el("div", "small", "Status: " + d.status + "  |  explanation by: " + d.explanation_source)); out.append(ex);
+
+    if (d.alerts.length) { const b = el("div", "box"); b.append(el("b", "", "Alerts"));
+      d.alerts.forEach(a => { const c = el("div", "card " + a.severity); c.append(el("b", "", a.severity + " - " + a.rule_id), el("div", "", a.finding), el("div", "small", a.recommended_action + "  (" + a.evidence_source + ")")); b.append(c); }); out.append(b); }
+    if (d.not_checked.length) { const b = el("div", "box"); b.append(el("b", "", "Could not be checked"));
+      d.not_checked.forEach(n => b.append(el("div", "small", "• " + n.check + ": " + n.reason))); out.append(b); }
+    if (d.missing_data.length) out.append(el("div", "small", "Missing patient data: " + d.missing_data.join(", ")));
+  } catch (e) { out.replaceChildren(el("p", "err", "Could not reach the server: " + e)); }
+  finally { $("go").disabled = false; }
+};
+</script></body></html>
